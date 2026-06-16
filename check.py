@@ -11,6 +11,7 @@ State (last seen status per product) is kept in state.json so we only alert on
 the *transition* into stock, not on every run.
 """
 
+import html
 import json
 import os
 import re
@@ -59,7 +60,12 @@ def notify(text: str) -> None:
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            params={"chat_id": TG_CHAT, "text": text, "disable_web_page_preview": False},
+            params={
+                "chat_id": TG_CHAT,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False,
+            },
             timeout=20,
         )
         if r.status_code != 200:
@@ -68,13 +74,21 @@ def notify(text: str) -> None:
         print(f"  [telegram request failed: {e}]")
 
 
+PRICE_RE = re.compile(r"C\$\s?\d[\d.,]*")
+
+
 def detect_status(page):
-    """Return (status, evidence) where status is in_stock | out_of_stock | unknown."""
-    body_text = ""
+    """Return (status, evidence, price) where status is in_stock | out_of_stock | unknown."""
+    raw_text = ""
     try:
-        body_text = page.inner_text("body", timeout=5000).lower()
+        raw_text = page.inner_text("body", timeout=5000)
     except Exception:
         pass
+    body_text = raw_text.lower()
+
+    # Grab the displayed price (e.g. "C$4,199.95") if present, for the alert.
+    m = PRICE_RE.search(raw_text)
+    price = m.group(0).replace("C$", "C$ ").replace("  ", " ").strip() if m else None
 
     # Look for a visible, enabled add-to-cart button (extra positive evidence).
     cart_button = False
@@ -93,16 +107,16 @@ def detect_status(page):
 
     loaded = LOADED_MARKER in body_text
     markers_found = [m for m in OUT_OF_STOCK_MARKERS if m in body_text]
-    evidence = f"loaded={loaded}, cart_button={cart_button}, out_markers={markers_found or 'none'}"
+    evidence = f"loaded={loaded}, cart_button={cart_button}, out_markers={markers_found or 'none'}, price={price or '—'}"
 
     # If the product section never rendered, don't guess — say unknown.
     if not loaded:
-        return "unknown", evidence
+        return "unknown", evidence, price
     # Product rendered with an out-of-stock notice -> out of stock.
     if markers_found:
-        return "out_of_stock", evidence
+        return "out_of_stock", evidence, price
     # Product rendered, no out-of-stock notice -> it's purchasable.
-    return "in_stock", evidence
+    return "in_stock", evidence, price
 
 
 def load_json(path, default):
@@ -146,17 +160,31 @@ def main():
                     )
                 except Exception:
                     page.wait_for_timeout(3000)  # fall back to a short settle
-                status, evidence = detect_status(page)
+                status, evidence, price = detect_status(page)
             except Exception as e:
-                status, evidence = "unknown", f"error: {e}"
+                status, evidence, price = "unknown", f"error: {e}", None
 
             print(f"[{pid}] {name}: {prev} -> {status}  ({evidence})")
 
+            safe_name = html.escape(name)
+            price_line = f"\n💰 <b>{html.escape(price)}</b>" if price else ""
+
             if DEBUG_NOTIFY:
-                notify(f"🔎 DEBUG [{name}]\nstatus={status}\n{evidence}\n{url}")
+                badge = {"in_stock": "🟢", "out_of_stock": "🔴"}.get(status, "⚪️")
+                notify(
+                    f"🔎 <b>DEBUG</b>\n"
+                    f"🛒 {safe_name}\n"
+                    f"{badge} Estado: <code>{status}</code>{price_line}\n"
+                    f"<a href=\"{html.escape(url)}\">Ver producto →</a>\n"
+                    f"<i>{html.escape(evidence)}</i>"
+                )
 
             if status == "in_stock" and prev != "in_stock":
-                notify(f"✅ ¡Disponible de nuevo!\n{name}\n{url}")
+                notify(
+                    f"🟢 <b>¡Disponible de nuevo!</b>\n\n"
+                    f"🛒 <b>{safe_name}</b>{price_line}\n\n"
+                    f"👉 <a href=\"{html.escape(url)}\">Comprar en PriceSmart</a>"
+                )
 
             state[pid] = {"status": status, "checked_at": now, "evidence": evidence}
 
