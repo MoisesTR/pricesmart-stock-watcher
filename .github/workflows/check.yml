@@ -2,7 +2,10 @@ name: stock-check
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes (UTC; GitHub may delay a few min)
+    # Every 30 min at :07/:37 — odd offset avoids the heavily-throttled :00/:30
+    # slots so GitHub drops/delays fewer scheduled runs. Times are UTC and
+    # best-effort (GitHub never guarantees exact scheduled timing).
+    - cron: "7,37 * * * *"
   workflow_dispatch:           # lets you run it manually from the Actions tab
 
 concurrency:
