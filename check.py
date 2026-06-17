@@ -179,11 +179,20 @@ def main():
                     f"<i>{html.escape(evidence)}</i>"
                 )
 
-            if status == "in_stock" and prev != "in_stock":
+            # Only alert on a confirmed restock, not on first-seen/uncertain state.
+            if status == "in_stock" and prev == "out_of_stock":
                 notify(
                     f"🟢 <b>¡Disponible de nuevo!</b>\n\n"
                     f"🛒 <b>{safe_name}</b>{price_line}\n\n"
                     f"👉 <a href=\"{html.escape(url)}\">Comprar en PriceSmart</a>"
+                )
+
+            # Alert when a product that WAS available has just sold out.
+            if status == "out_of_stock" and prev == "in_stock":
+                notify(
+                    f"🔴 <b>Ya no está disponible</b>\n\n"
+                    f"🛒 <b>{safe_name}</b>\n\n"
+                    f"<a href=\"{html.escape(url)}\">Ver producto →</a>"
                 )
 
             state[pid] = {"status": status, "checked_at": now, "evidence": evidence}
